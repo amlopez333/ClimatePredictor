@@ -1,30 +1,81 @@
 import numpy as np
 from threading import Thread
 from queue import Queue
-from openpyxl import load_workbook
+import csv
 
-def formatData(rows, setOfCells, activeSheet, matrixOfData = []):
-    for i in range(2, rows):
-        rowOfData = [activeSheet['{0}{1}'.format(l, i)].value for l in setOfCells]
-        for i in range(len(rowOfData)):
-            try:
-                rowOfData[i] = float(rowOfData[i])
-            except ValueError:
-                rowOfData[i] = 0
+class Worker(Thread):
+    def __init__(self, inQueue, outQueue):
+        Thread.__init__(self)
+        self.inQueue = inQueue
+        self.outQueue = outQueue
+        self.daemon = True
+        self.fieldSet = ['AIRTEMP_C_AVG', 'WINDSP_MS_U', 'WINDDIR_DU', 'BP_MBAR', 'RAIN_MM_TOT']
+    def run(self):
+        while True:
+            row = self.inQueue.get()
+            dataRow = [row[i] for i in self.fieldSet]
+            self.outQueue.put(dataRow)
+            self.inQueue.task_done()
 
-        matrixOfData.append(rowOfData)
-    return matrixOfData
-def labelData(matrixOfData, labels = []):
-    for i in matrixOfData:
-        rainfallLvl = i.pop()
-        label = 1 if rainfallLvl > 0.0 else 0
-        labels.append(label)
-    return matrixOfData, labels
+def getData():
+    inQueue = Queue()
+    outQueue = Queue()
 
-def getData(xlsWS, rows, setOfCells = ['F', 'G', 'I', 'K', 'Q', 'L'], allCells = False):
-    wb = load_workbook(xlsWS)
-    activeSheet = wb.active
-    if not allCells:
-        matrixOfData = formatData(rows, setOfCells, activeSheet)
-        matrixOfData, labels = labelData(matrixOfData)
-        return matrixOfData, labels
+    for x in range(8):
+        worker = Worker(inQueue, outQueue)
+        worker.start()
+    with open('Datos Meteorologicos Automaticos.csv') as dataCSV:
+        reader = csv.DictReader(dataCSV)
+        for row in reader:
+            inQueue.put(row)
+        inQueue.join()
+    validData = []
+
+    while not (outQueue.empty()):
+        row = outQueue.get()
+        valid = True
+        for i in row:
+            if i == '':
+                valid = False
+                break
+        if(valid):
+            validData.append(row)
+    return validData
+def processValidData(validData, processedData = []):
+    for row in validData:
+        newRow = [float(j) for j in row]
+        processedData.append(newRow)
+    return processedData
+
+def getProcessedData():
+    validData = getData()
+    processedData = processValidData(validData)
+    return processedData
+
+def labelData(processedData, labels = []):
+    for elem in processedData:
+        rainfallLvl = elem.pop()
+        if (rainfallLvl > 0.0):
+            labels.append(1)
+        else:
+            labels.append(-1)
+    return labels
+
+def getMeasures(processedData, measures = []):
+    for elem in processedData:
+        rainfallLvl = elem.pop()
+        measures.append(rainfallLvl)
+    return measures
+
+def createFeatureMatrix(processedData, featureMatrix = []):
+    for elem in processedData:
+        rainfallLvl = elem.pop()
+        featureMatrix.append(elem)
+    return featureMatrix
+
+def processAll():
+    processedData = getProcessedData()
+    labels = labelData(processedData)
+    measures = getMeasures(processedData)
+    featureMatrix = createFeatureMatrix(processedData)
+    return featureMatrix, labels, measures
